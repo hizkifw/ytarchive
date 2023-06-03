@@ -7,6 +7,8 @@ RUN go build
 
 FROM alpine:latest AS production
 
+RUN apk --no-cache add ca-certificates ffmpeg
+
 WORKDIR /app
 COPY --from=builder /app/ytarchive /app/ytarchive
 
