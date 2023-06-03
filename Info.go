@@ -1146,7 +1146,7 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 			curFrag += 1
 			progressChan <- &ProgressInfo{dataType, bytesWritten, maxSeqs, startFrag}
 
-			if di.FragFiles {
+			if !keepFragments && di.FragFiles {
 				err = os.Remove(data.FileName)
 				if err != nil {
 					LogWarn("%s: Error deleting fragment %d: %s", logName, data.Seq, err)

@@ -75,6 +75,9 @@ Options:
 	--h264
 		Only download h264 video, skipping VP9 if it would have been used.
 
+	--keep-fragments
+		Keep the individual .ts fragment files.
+
 	-k
 	--keep-ts-files
 		Keep the final stream audio and video files after muxing them

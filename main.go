@@ -93,6 +93,9 @@ Options:
 	--h264
 		Only download h264 video, skipping VP9 if it would have been used.
 
+	--keep-fragments
+		Keep the individual .ts fragment files.
+
 	-k
 	--keep-ts-files
 		Keep the final stream audio and video files after muxing them
@@ -356,6 +359,7 @@ var (
 	mkv               bool
 	statusNewlines    bool
 	keepTSFiles       bool
+	keepFragments     bool
 	separateAudio     bool
 	monitorChannel    bool
 	vp9               bool
@@ -407,6 +411,7 @@ func init() {
 	cliFlags.BoolVar(&statusNewlines, "newline", false, "Write progress to a new line instead of keeping it on one line.")
 	cliFlags.BoolVar(&keepTSFiles, "k", false, "Keep the raw .ts files instead of deleting them after muxing.")
 	cliFlags.BoolVar(&keepTSFiles, "keep-ts-files", false, "Keep the raw .ts files instead of deleting them after muxing.")
+	cliFlags.BoolVar(&keepFragments, "keep-fragments", false, "Keep the individual .ts fragments instead of deleting them.")
 	cliFlags.BoolVar(&separateAudio, "separate-audio", false, "Save a copy of the audio separately along with the muxed file.")
 	cliFlags.BoolVar(&monitorChannel, "monitor-channel", false, "Continually monitor a channel for streams.")
 	cliFlags.StringVar(&cookieFile, "c", "", "Cookies to be used when downloading.")
