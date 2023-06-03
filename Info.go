@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -953,8 +954,24 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 	dataToWrite := make([]*Fragment, 0, di.Jobs)
 	deletingFrags := make([]string, 0, 1)
 	logName := fmt.Sprintf("%s-download", dataType)
+	playlistName := fmt.Sprintf("%s.m3u8", di.GetBaseFilePath(dataType))
+	var playlistFile *os.File
 	f, err := os.Create(dataFile)
 	defer func() { done <- struct{}{} }()
+
+	if generateM3u8 {
+		playlistFile, err = os.Create(playlistName)
+		if err != nil {
+			LogError("%s: Error opening %s for writing: %s", dataType, playlistName, err)
+			di.Stop()
+			return
+		}
+		defer playlistFile.Close()
+		playlistFile.WriteString("#EXTM3U\n")
+		playlistFile.WriteString(fmt.Sprintf("#EXT-X-TARGETDURATION:%d\n", di.TargetDuration))
+		playlistFile.WriteString(fmt.Sprintf("#EXT-X-MEDIA-SEQUENCE:%d\n", curFrag))
+		playlistFile.WriteString(fmt.Sprintf("#EXT-X-VERSION:%d\n", 4))
+	}
 
 	if di.LastSq >= 0 {
 		curFrag = di.LastSq - (LiveMaximumSeekable / (di.TargetDuration))
@@ -1146,7 +1163,12 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 			curFrag += 1
 			progressChan <- &ProgressInfo{dataType, bytesWritten, maxSeqs, startFrag}
 
-			if !keepFragments && di.FragFiles {
+			if generateM3u8 {
+				fnameOnly := filepath.Base(data.FileName)
+				playlistFile.WriteString(fmt.Sprintf("#EXTINF:%d.0,\n%s\n", di.TargetDuration, fnameOnly))
+			}
+
+			if !generateM3u8 && di.FragFiles {
 				err = os.Remove(data.FileName)
 				if err != nil {
 					LogWarn("%s: Error deleting fragment %d: %s", logName, data.Seq, err)

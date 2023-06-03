@@ -72,11 +72,12 @@ Options:
 		Set a specific ffmpeg location, including program name.
 		e.g. "C:\ffmpeg\ffmpeg.exe" or "/opt/ffmpeg/ffmpeg"
 
+	--generate-m3u8
+		Keep the individual .ts fragment files, and generate an .m3u8 file for
+		HLS streaming.
+
 	--h264
 		Only download h264 video, skipping VP9 if it would have been used.
-
-	--keep-fragments
-		Keep the individual .ts fragment files.
 
 	-k
 	--keep-ts-files
@@ -176,6 +177,10 @@ Options:
 		Save the audio to a separate file, similar to when downloading
 		audio_only, alongside the final muxed file. This includes embedding
 		metadata and the thumbnail if set.
+
+	--temp-dir
+		Temporary directory where fragments will be stored. If not specified,
+		one will be created.
 
 	--threads THREAD_COUNT
 		Set the number of threads to use for downloading audio and video

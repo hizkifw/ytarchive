@@ -90,11 +90,12 @@ Options:
 		Set a specific ffmpeg location, including program name.
 		e.g. "C:\ffmpeg\ffmpeg.exe" or "/opt/ffmpeg/ffmpeg"
 
+	--generate-m3u8
+		Keep the individual .ts fragment files, and generate an .m3u8 file for
+		HLS streaming.
+
 	--h264
 		Only download h264 video, skipping VP9 if it would have been used.
-
-	--keep-fragments
-		Keep the individual .ts fragment files.
 
 	-k
 	--keep-ts-files
@@ -194,6 +195,10 @@ Options:
 		Save the audio to a separate file, similar to when downloading
 		audio_only, alongside the final muxed file. This includes embedding
 		metadata and the thumbnail if set.
+
+	--temp-dir
+		Temporary directory where fragments will be stored. If not specified,
+		one will be created.
 
 	--threads THREAD_COUNT
 		Set the number of threads to use for downloading audio and video
@@ -328,6 +333,7 @@ var (
 	gvAudioUrl        string
 	gvVideoUrl        string
 	ffmpegPath        string
+	tmpDir            string
 	proxyUrl          *url.URL
 	threadCount       uint
 	fragMaxTries      uint
@@ -359,7 +365,7 @@ var (
 	mkv               bool
 	statusNewlines    bool
 	keepTSFiles       bool
-	keepFragments     bool
+	generateM3u8      bool
 	separateAudio     bool
 	monitorChannel    bool
 	vp9               bool
@@ -409,9 +415,9 @@ func init() {
 	cliFlags.BoolVar(&forceIPv6, "ipv6", false, "Force IPv6 connections.")
 	cliFlags.BoolVar(&mkv, "mkv", false, "Make the final container mkv (ignored when audio only).")
 	cliFlags.BoolVar(&statusNewlines, "newline", false, "Write progress to a new line instead of keeping it on one line.")
+	cliFlags.BoolVar(&generateM3u8, "generate-m3u8", false, "Keep the individual .ts fragments instead of deleting them.")
 	cliFlags.BoolVar(&keepTSFiles, "k", false, "Keep the raw .ts files instead of deleting them after muxing.")
 	cliFlags.BoolVar(&keepTSFiles, "keep-ts-files", false, "Keep the raw .ts files instead of deleting them after muxing.")
-	cliFlags.BoolVar(&keepFragments, "keep-fragments", false, "Keep the individual .ts fragments instead of deleting them.")
 	cliFlags.BoolVar(&separateAudio, "separate-audio", false, "Save a copy of the audio separately along with the muxed file.")
 	cliFlags.BoolVar(&monitorChannel, "monitor-channel", false, "Continually monitor a channel for streams.")
 	cliFlags.StringVar(&cookieFile, "c", "", "Cookies to be used when downloading.")
@@ -419,6 +425,7 @@ func init() {
 	cliFlags.StringVar(&fnameFormat, "o", DefaultFilenameFormat, "Filename output format.")
 	cliFlags.StringVar(&fnameFormat, "output", DefaultFilenameFormat, "Filename output format.")
 	cliFlags.StringVar(&ffmpegPath, "ffmpeg-path", "ffmpeg", "Specify a custom ffmpeg program location, including program name.")
+	cliFlags.StringVar(&tmpDir, "temp-dir", "", "Specify a custom temporary directory.")
 	cliFlags.IntVar(&retrySecs, "r", 0, "Seconds to wait between checking stream status.")
 	cliFlags.IntVar(&retrySecs, "retry-stream", 0, "Seconds to wait between checking stream status.")
 	cliFlags.UintVar(&threadCount, "threads", 1, "Number of download threads for each stream type.")
@@ -592,7 +599,6 @@ func run() int {
 	// We checked if there would be errors earlier, should be good
 	fullFPath, _ := FormatFilename(fnameFormat, info.FormatInfo)
 	fdir := filepath.Dir(fullFPath)
-	var tmpDir string
 	var absDir string
 
 	if !strings.HasPrefix(fnameFormat, string(os.PathSeparator)) {
@@ -629,8 +635,14 @@ func run() int {
 		}
 	}
 
-	tmpDir, err = os.MkdirTemp(fdir, fmt.Sprintf("%s__", info.VideoID))
-	if err != nil {
+	if tmpDir == "" {
+		tmpDir, err = os.MkdirTemp(fdir, fmt.Sprintf("%s__", info.VideoID))
+		if err != nil {
+			LogWarn("Error creating temp directory: %s", err)
+			LogWarn("Will download data directly to %s instead", fdir)
+			tmpDir = fdir
+		}
+	} else if err = os.MkdirAll(tmpDir, 0755); err != nil {
 		LogWarn("Error creating temp directory: %s", err)
 		LogWarn("Will download data directly to %s instead", fdir)
 		tmpDir = fdir
@@ -644,6 +656,7 @@ func run() int {
 
 	afileName := fmt.Sprintf("%s.f%d", fname, AudioItag)
 	vfileName := fmt.Sprintf("%s.f%d", fname, info.Quality)
+	playlistFileName := fmt.Sprintf("%s.m3u8", fname)
 	thmbnlName := fmt.Sprintf("%s.jpg", fname)
 	descFileName := fmt.Sprintf("%s.description", fname)
 	muxFileName := fmt.Sprintf("%s.ffmpeg.txt", fname)
@@ -689,6 +702,18 @@ func run() int {
 			LogWarn("Error writing description file: %s", err)
 			TryDelete(descFile)
 		}
+	}
+
+	if generateM3u8 {
+		indexFile, err := os.Create(filepath.Join(tmpDir, playlistFileName))
+		if err != nil {
+			LogError("Failed to create playlist file: %s", err)
+			return 1
+		}
+
+		indexFile.WriteString("#EXTM3U\n")
+		indexFile.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=2500000,CODECS=\"%s\"\n%s\n", "", vfileName+".m3u8"))
+		indexFile.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=127000,CODECS=\"%s\"\n%s\n", "mp4a.40.2", afileName+".m3u8"))
 	}
 
 	dlDoneChan := make(chan struct{}, 2)
