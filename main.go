@@ -163,6 +163,9 @@ Options:
 		See FORMAT OPTIONS below for a list of available format keys.
 		Default is '%[3]s'
 
+	--print-fragment-urls
+		Prints the URLs for each fragment to stdout instead of downloading.
+
 	--proxy <SCHEME>://[<USER>:<PASS>@]<HOST>:<PORT>
 		Specify a proxy to use for downloading. e.g.
 			- socks5://127.0.0.1:1080
@@ -338,6 +341,7 @@ var (
 	threadCount       uint
 	fragMaxTries      uint
 	retrySecs         int
+	printFragmentUrls bool
 	downloadThumbnail bool
 	addMeta           bool
 	writeDesc         bool
@@ -420,6 +424,7 @@ func init() {
 	cliFlags.BoolVar(&keepTSFiles, "keep-ts-files", false, "Keep the raw .ts files instead of deleting them after muxing.")
 	cliFlags.BoolVar(&separateAudio, "separate-audio", false, "Save a copy of the audio separately along with the muxed file.")
 	cliFlags.BoolVar(&monitorChannel, "monitor-channel", false, "Continually monitor a channel for streams.")
+	cliFlags.BoolVar(&printFragmentUrls, "print-fragment-urls", false, "Print the fragment URLs to stdout.")
 	cliFlags.StringVar(&cookieFile, "c", "", "Cookies to be used when downloading.")
 	cliFlags.StringVar(&cookieFile, "cookies", "", "Cookies to be used when downloading.")
 	cliFlags.StringVar(&fnameFormat, "o", DefaultFilenameFormat, "Filename output format.")

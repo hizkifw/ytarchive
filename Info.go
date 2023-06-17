@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -172,6 +174,15 @@ type DownloadInfo struct {
 	LastUpdated    time.Time
 
 	MDLInfo map[string]*MediaDLInfo
+}
+
+/*
+For printing each fragment info to the stdout
+*/
+type FragPrintInfo struct {
+	Seq      int    `json:"seq"`
+	FileName string `json:"file_name"`
+	Url      string `json:"url"`
 }
 
 func NewDownloadInfo() *DownloadInfo {
@@ -377,7 +388,7 @@ func (di *DownloadInfo) printChannelAndTitle(pr *PlayerResponse) {
 
 func (di *DownloadInfo) printStatusWithoutLock() {
 	if loglevel >= LoglevelError {
-		fmt.Print(di.Status)
+		fmt.Fprint(os.Stderr, di.Status)
 	}
 }
 
@@ -787,6 +798,19 @@ func (di *DownloadInfo) downloadFragment(state *fragThreadState, dataChan chan<-
 		baseUrl := di.GetDownloadUrl(state.DataType)
 		seqUrl := fmt.Sprintf(baseUrl, state.SeqNum)
 
+		if printFragmentUrls {
+			j, err := json.Marshal(&FragPrintInfo{
+				Seq:      state.SeqNum,
+				FileName: path.Base(fname),
+				Url:      seqUrl,
+			})
+			if err == nil {
+				WriteStdoutLocked("%s\n", string(j))
+				dataChan <- &Fragment{}
+				return
+			}
+		}
+
 		req, err := http.NewRequest("GET", seqUrl, nil)
 		if err != nil {
 			LogDebug("%s: error creating request: %s", state.Name, err.Error())
@@ -1022,10 +1046,12 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 			select {
 			case data := <-dataChan:
 				dataReceived = true
-				dataToWrite = append(dataToWrite, data)
+				if !printFragmentUrls {
+					dataToWrite = append(dataToWrite, data)
+				}
 				activeDownloads -= 1
 
-				if !downloading || stopping || closed {
+				if !downloading || stopping || closed || printFragmentUrls {
 					continue
 				}
 

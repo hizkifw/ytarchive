@@ -145,6 +145,9 @@ Options:
 		See FORMAT OPTIONS below for a list of available format keys.
 		Default is '%(title)s-%(id)s'
 
+	--print-fragment-urls
+		Prints the URLs for each fragment to stdout instead of downloading.
+
 	--proxy <SCHEME>://[<USER>:<PASS>@]<HOST>:<PORT>
 		Specify a proxy to use for downloading. e.g.
 			- socks5://127.0.0.1:1080

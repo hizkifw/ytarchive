@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/alessio/shellescape"
@@ -175,6 +176,14 @@ func LogTrace(format string, args ...interface{}) {
 		}
 		log.Printf("TRACE: \033[35m%s\033[0m\033[K", msg)
 	}
+}
+
+var stdoutLock = &sync.Mutex{}
+
+func WriteStdoutLocked(format string, args ...interface{}) {
+	stdoutLock.Lock()
+	defer stdoutLock.Unlock()
+	fmt.Printf(format, args...)
 }
 
 func DialContextOverride(ctx context.Context, network, addr string) (net.Conn, error) {
