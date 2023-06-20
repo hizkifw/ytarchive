@@ -710,15 +710,64 @@ func run() int {
 	}
 
 	if generateM3u8 {
+		// Generate m3u8 index
 		indexFile, err := os.Create(filepath.Join(tmpDir, playlistFileName))
 		if err != nil {
 			LogError("Failed to create playlist file: %s", err)
 			return 1
 		}
+		defer indexFile.Close()
 
 		indexFile.WriteString("#EXTM3U\n")
-		indexFile.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=2500000,CODECS=\"%s\"\n%s\n", "", vfileName+".m3u8"))
-		indexFile.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=127000,CODECS=\"%s\"\n%s\n", "mp4a.40.2", afileName+".m3u8"))
+		indexFile.WriteString(fmt.Sprintf("#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aac\",DEFAULT=YES,AUTOSELECT=YES,URI=\"%s\"\n", afileName+".m3u8"))
+		indexFile.WriteString(fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=2500000,CODECS=\"%s\",AUDIO=\"aac\"\n%s\n", "", vfileName+".m3u8"))
+
+		// Generate HTML page
+		htmlPage, err := os.Create(filepath.Join(tmpDir, "index.html"))
+		if err != nil {
+			LogWarn("Failed to create HTML page: %s", err)
+		} else {
+			defer htmlPage.Close()
+
+			htmlPage.WriteString(fmt.Sprintf(`
+<html>
+  <head>
+    <title>ytarchive</title>
+  </head>
+
+  <body>
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.6/hls.min.js"
+      integrity="sha512-zwW63/JER0eBVaDHSUPx0MEWQJmDMhDppeoAzOVY8TplfXNKT68yLwqbE6i+AM8YY47aGiI0Gb+/YGU1unorHg=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    ></script>
+
+    <video height="600" id="video" controls></video>
+
+    <script>
+      const srcUrl = "%s";
+      var video = document.getElementById("video");
+      if (Hls.isSupported()) {
+        var hls = new Hls({
+          debug: true,
+        });
+        hls.loadSource(srcUrl);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MEDIA_ATTACHED, function () {
+          video.muted = true;
+          video.play();
+        });
+      } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = srcUrl;
+        video.addEventListener("canplay", function () {
+          video.play();
+        });
+      }
+    </script>
+  </body>
+</html>`, playlistFileName))
+		}
 	}
 
 	dlDoneChan := make(chan struct{}, 2)

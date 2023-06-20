@@ -786,6 +786,14 @@ func (di *DownloadInfo) downloadFragment(state *fragThreadState, dataChan chan<-
 	state.FullRetries = 3
 	state.Is403 = false
 	fname := fmt.Sprintf("%s.frag%d.ts", state.BaseFilePath, state.SeqNum)
+	fnameTemp := fmt.Sprintf("%s.tmp", fname)
+
+	// Skip if the file already exists
+	if _, err := os.Stat(fname); err == nil {
+		LogDebug("Fragment %d already exists, skipping\n", state.SeqNum)
+		dataChan <- nil
+		return
+	}
 
 	for state.Tries < int(di.FragMaxTries) || di.FragMaxTries == 0 {
 		if di.IsStopping() {
@@ -806,7 +814,7 @@ func (di *DownloadInfo) downloadFragment(state *fragThreadState, dataChan chan<-
 			})
 			if err == nil {
 				WriteStdoutLocked("%s\n", string(j))
-				dataChan <- &Fragment{}
+				dataChan <- nil
 				return
 			}
 		}
@@ -897,14 +905,28 @@ func (di *DownloadInfo) downloadFragment(state *fragThreadState, dataChan chan<-
 		}
 
 		if state.ToFile {
-			err = os.WriteFile(fname, respData, 0644)
-			if err != nil {
+			if err = os.WriteFile(fnameTemp, respData, 0644); err != nil {
 				LogDebug("%s: Failed to write fragment %d to file: %s", state.Name, state.SeqNum, err)
 				di.PrintStatus()
 
 				state.Tries += 1
 				if !ContinueFragmentDownload(di, state) {
-					TryDelete(fname)
+					TryDelete(fnameTemp)
+					return
+				}
+
+				time.Sleep(state.SleepTime)
+				continue
+			}
+
+			// Rename the file to the correct name
+			if err = os.Rename(fnameTemp, fname); err != nil {
+				LogDebug("%s: Failed to rename fragment %d to file: %s", state.Name, state.SeqNum, err)
+				di.PrintStatus()
+
+				state.Tries += 1
+				if !ContinueFragmentDownload(di, state) {
+					TryDelete(fnameTemp)
 					return
 				}
 
@@ -984,17 +1006,31 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 	defer func() { done <- struct{}{} }()
 
 	if generateM3u8 {
-		playlistFile, err = os.Create(playlistName)
-		if err != nil {
-			LogError("%s: Error opening %s for writing: %s", dataType, playlistName, err)
-			di.Stop()
-			return
+		// Check if the playlist file exists
+		if _, err := os.Stat(playlistName); err == nil {
+			// Playlist file exists, open it for appending
+			playlistFile, err = os.OpenFile(playlistName, os.O_APPEND|os.O_WRONLY, 0644)
+			if err != nil {
+				LogError("%s: Error opening %s for appending: %s", dataType, playlistName, err)
+				di.Stop()
+				return
+			}
+			defer playlistFile.Close()
+		} else {
+			// Playlist file does not exist, create it
+			playlistFile, err = os.Create(playlistName)
+			if err != nil {
+				LogError("%s: Error opening %s for writing: %s", dataType, playlistName, err)
+				di.Stop()
+				return
+			}
+			defer playlistFile.Close()
+			playlistFile.WriteString("#EXTM3U\n")
+			playlistFile.WriteString(fmt.Sprintf("#EXT-X-TARGETDURATION:%d\n", di.TargetDuration))
+			playlistFile.WriteString(fmt.Sprintf("#EXT-X-MEDIA-SEQUENCE:%d\n", curFrag))
+			playlistFile.WriteString(fmt.Sprintf("#EXT-X-VERSION:%d\n", 4))
+			playlistFile.Sync()
 		}
-		defer playlistFile.Close()
-		playlistFile.WriteString("#EXTM3U\n")
-		playlistFile.WriteString(fmt.Sprintf("#EXT-X-TARGETDURATION:%d\n", di.TargetDuration))
-		playlistFile.WriteString(fmt.Sprintf("#EXT-X-MEDIA-SEQUENCE:%d\n", curFrag))
-		playlistFile.WriteString(fmt.Sprintf("#EXT-X-VERSION:%d\n", 4))
 	}
 
 	if di.LastSq >= 0 {
@@ -1046,12 +1082,15 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 			select {
 			case data := <-dataChan:
 				dataReceived = true
-				if !printFragmentUrls {
+				if data != nil {
 					dataToWrite = append(dataToWrite, data)
+				} else {
+					curFrag += 1
 				}
+
 				activeDownloads -= 1
 
-				if !downloading || stopping || closed || printFragmentUrls {
+				if !downloading || stopping || closed || data == nil {
 					continue
 				}
 
@@ -1108,18 +1147,51 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 		i := 0
 		for i < len(dataToWrite) && tries > 0 {
 			data := dataToWrite[i]
+			bytesWritten := 0
+
 			if data.Seq != curFrag {
 				i += 1
 				continue
 			}
 
-			if di.FragFiles {
-				readBytes, err := os.ReadFile(data.FileName)
+			if generateM3u8 {
+				fnameOnly := filepath.Base(data.FileName)
+				playlistFile.WriteString(fmt.Sprintf("#EXTINF:%d.0,\n%s\n", di.TargetDuration, fnameOnly))
+				LogDebug("%s: Wrote %s to playlist", logName, fnameOnly)
+			} else {
+				if di.FragFiles {
+					readBytes, err := os.ReadFile(data.FileName)
+
+					if err != nil {
+						tries -= 1
+						LogWarn("%s: Error when attempting to read fragment %d for writing: %s", logName, curFrag, err)
+						di.PrintStatus()
+
+						if tries > 0 {
+							LogWarn("%s: Will try %d more time(s)", logName, tries)
+							di.PrintStatus()
+						}
+
+						continue
+					}
+
+					data.Data = bytes.NewBuffer(readBytes)
+				}
+
+				buf := make([]byte, BufferSize)
+
+				rc, _ := data.Data.Read(buf)
+				count, err := f.Write(RemoveSidx(buf[:rc]))
+				bytesWritten += count
 
 				if err != nil {
 					tries -= 1
-					LogWarn("%s: Error when attempting to read fragment %d for writing: %s", logName, curFrag, err)
+					LogWarn("%s: Error when attempting to write fragment %d to %s: %s", logName, curFrag, dataFile, err)
 					di.PrintStatus()
+
+					// If we errored but wrote some data, set the offset back to
+					// where we want to write the fragment
+					f.Seek(int64(bytesWritten), 1)
 
 					if tries > 0 {
 						LogWarn("%s: Will try %d more time(s)", logName, tries)
@@ -1129,70 +1201,39 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 					continue
 				}
 
-				data.Data = bytes.NewBuffer(readBytes)
-			}
-
-			bytesWritten := 0
-			buf := make([]byte, BufferSize)
-
-			rc, _ := data.Data.Read(buf)
-			count, err := f.Write(RemoveSidx(buf[:rc]))
-			bytesWritten += count
-
-			if err != nil {
-				tries -= 1
-				LogWarn("%s: Error when attempting to write fragment %d to %s: %s", logName, curFrag, dataFile, err)
-				di.PrintStatus()
-
-				// If we errored but wrote some data, set the offset back to
-				// where we want to write the fragment
-				f.Seek(int64(bytesWritten), 1)
-
-				if tries > 0 {
-					LogWarn("%s: Will try %d more time(s)", logName, tries)
-					di.PrintStatus()
-				}
-
-				continue
-			}
-
-			for {
-				count, err = data.Data.Read(buf)
-				if err != nil {
-					break
-				}
-
-				count, err = f.Write(buf[:count])
-				bytesWritten += count
-
-				if err != nil {
-					tries -= 1
-					LogWarn("%s: Error when attempting to write fragment %d to %s: %s", logName, curFrag, dataFile, err)
-					di.PrintStatus()
-
-					f.Seek(int64(bytesWritten), 1)
-
-					if tries > 0 {
-						LogWarn("%s: Will try %d more time(s)", logName, tries)
-						di.PrintStatus()
+				for {
+					count, err = data.Data.Read(buf)
+					if err != nil {
+						break
 					}
 
-					break
-				}
-			}
+					count, err = f.Write(buf[:count])
+					bytesWritten += count
 
-			// something didn't work
-			if err != nil && err != io.EOF {
-				continue
+					if err != nil {
+						tries -= 1
+						LogWarn("%s: Error when attempting to write fragment %d to %s: %s", logName, curFrag, dataFile, err)
+						di.PrintStatus()
+
+						f.Seek(int64(bytesWritten), 1)
+
+						if tries > 0 {
+							LogWarn("%s: Will try %d more time(s)", logName, tries)
+							di.PrintStatus()
+						}
+
+						break
+					}
+				}
+
+				// something didn't work
+				if err != nil && err != io.EOF {
+					continue
+				}
 			}
 
 			curFrag += 1
 			progressChan <- &ProgressInfo{dataType, bytesWritten, maxSeqs, startFrag}
-
-			if generateM3u8 {
-				fnameOnly := filepath.Base(data.FileName)
-				playlistFile.WriteString(fmt.Sprintf("#EXTINF:%d.0,\n%s\n", di.TargetDuration, fnameOnly))
-			}
 
 			if !generateM3u8 && di.FragFiles {
 				err = os.Remove(data.FileName)
@@ -1225,15 +1266,17 @@ func (di *DownloadInfo) DownloadStream(dataType, dataFile string, progressChan c
 		}
 	}
 
-	if di.FragFiles {
+	if di.FragFiles && !generateM3u8 {
 		for _, d := range dataToWrite {
 			TryDelete(d.FileName)
 		}
 	}
 
-	for _, d := range deletingFrags {
-		LogInfo("%s: Attempting to delete fragments that failed to be deleted before", logName)
-		TryDelete(d)
+	if !generateM3u8 {
+		for _, d := range deletingFrags {
+			LogInfo("%s: Attempting to delete fragments that failed to be deleted before", logName)
+			TryDelete(d)
+		}
 	}
 
 	LogDebug("%s thread closing", logName)
